@@ -5,3 +5,14 @@ terminology from this assignment (REST API, endpoint, HTTP status code,
 raise_for_status, API key, form data vs. JSON body, rate limit, caching,
 json_normalize, record_path, meta, grain, opinion mining, named-entity
 recognition, prompt, system prompt, reasoning model), and make it actionable.
+Reflection
+
+This assignment taught me that most of the work in a pipeline built on a REST API is not calling the endpoint. It is reshaping the JSON that comes back into tables at the right grain. The API calls in apicalls.py followed one pattern: build the URL, send the request with my API key in the X-API-KEY header, call raise_for_status() so a 4xx or 5xx HTTP status code fails immediately, and return response.json(). I also learned the difference between form data (data=, used for the Azure sentiment and entity recognition endpoints) and a JSON body (json=, used for the systemone and chat completions endpoints). Caching each extract step also mattered because of the 150-request daily rate limit.
+
+This was the hardest function because json_normalize could not do it. With opinion mining, each sentence has targets and assessments, and a target points to its assessments through a relations list with a string ref like "#/documents/0/sentences/1/assessments/0". json_normalize with record_path and meta handles one level of nesting, such as sentences or entities, but it cannot follow a cross-reference between two sibling lists. I had to use nested loops and parse the index out of the ref string. I am still unsure about two things: how to handle a sentence with no targets or assessments key, and whether I should filter on relationType == "assessment" or also keep "target" relations. Next step: print one cached sentiment document in explore.py, trace one target by hand to its assessment text, and compare that with my output row.
+
+This function changes the grain several times. Opinion targets and named-entity recognition rows are stacked at the mention grain, then merged with subjects on (review_id, mention), with sentences on (review_id, sentence_id), and with reviews on review_id. A wrong merge key does not raise an error. It silently drops or duplicates rows, which I only noticed from row counts. The dedupe rule was also confusing: I have to sort by mention_offset before drop_duplicates, or I keep the wrong "oat milk" row. I need more practice reasoning about grain before I merge, meaning asking "what does one row represent in each table?" Next step: print len() after every merge and check that it matches what I expect. Then redo the pandas merge and drop_duplicates exercises from Assignment 05 on a small made-up table.
+
+- The difference between how_to merge types (inner vs. left) and what each does to row counts.
+- How json_normalize record_path and meta work together, and when nested loops are the better choice.
+- Why a prompt for the reasoning model gets counts from pandas instead of from the language model.

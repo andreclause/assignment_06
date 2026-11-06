@@ -104,6 +104,9 @@ def item_name(mention: str, aliases: dict) -> str:
         item_name("Mocha Latte", aliases)        ->  "mocha latte"   # not an alias
     """
     # TODO: your code here
+    lowered = mention.lower()
+    return aliases.get(lowered, lowered)
+
     pass
 
 
@@ -125,6 +128,24 @@ def build_mentions(reviews: pd.DataFrame, sentences: pd.DataFrame,
     `mention_offset`, plain index.
     """
     # TODO: your code here
+    columns = ["review_id", "date", "location", "stars", "item", "mention",
+               "subject", "mention_sentiment", "assessments", "sentence_text",
+               "source", "subject_confidence"]
+    stacked = pd.concat([opinions, entity_rows], ignore_index=True)
+    merged = (
+        stacked
+        .merge(subjects, on=["review_id", "mention"])
+        .merge(sentences[["review_id", "sentence_id", "sentence_text"]],
+               on=["review_id", "sentence_id"])
+        .merge(reviews[["review_id", "date", "location", "stars"]],
+               on="review_id")
+    )
+    merged["item"] = merged["mention"].map(lambda m: item_name(m, aliases))
+    merged = merged[merged["subject"] != "other"]
+    merged = merged.sort_values(["review_id", "mention_offset"])
+    merged = merged.drop_duplicates(["review_id", "sentence_id", "item"])
+    return merged[columns].reset_index(drop=True)
+
     pass
 
 
@@ -138,6 +159,19 @@ def analyze_reviews(reviews_file: str) -> pd.DataFrame:
     `build_mentions` with `load_aliases()`. Call the functions; do not redo them.
     """
     # TODO: your code here
+    reviews = pd.read_csv(reviews_file)
+    documents = sentiment_step(reviews, cache_path(reviews_file, "sentiment"))
+    entity_documents = entities_step(reviews, cache_path(reviews_file, "entities"))
+    sentences = sentences_table(documents)
+    opinions = opinions_table(documents)
+    entities = entities_table(entity_documents)
+    entity_rows = entity_mentions(entities, sentences, opinions)
+    combined = pd.concat([opinions, entity_rows], ignore_index=True)
+    subjects = subjects_step(reviews, combined,
+                             cache_path(reviews_file, "subjects", "csv"))
+    return build_mentions(reviews, sentences, opinions, entity_rows, subjects,
+                          load_aliases())
+
     pass
 
 
@@ -164,6 +198,21 @@ def summarize_items(mentions: pd.DataFrame) -> pd.DataFrame:
       an item is loved or a problem.
     """
     # TODO: your code here
+    columns = ["subject", "item", "mentions", "positive", "negative", "net"]
+    if mentions.empty:
+        return pd.DataFrame(columns=columns)
+    table = pd.pivot_table(mentions, index=["subject", "item"],
+                           columns="mention_sentiment", aggfunc="size",
+                           fill_value=0)
+    result = pd.DataFrame({
+        "mentions": table.sum(axis=1),
+        "positive": table.get("positive", 0),
+        "negative": table.get("negative", 0),
+    })
+    result["net"] = result["positive"] - result["negative"]
+    result = result.reset_index()
+    result = result.sort_values(["mentions", "item"], ascending=[False, True])
+    return result[columns].reset_index(drop=True)
     pass
 
 
@@ -277,6 +326,32 @@ def build_messages(question: str, evidence: pd.DataFrame, limit: int = 20) -> li
     and good at prose — give each the job it is good at.
     """
     # TODO: your code here
+    total = len(evidence)
+    positive = int((evidence["mention_sentiment"] == "positive").sum())
+    negative = int((evidence["mention_sentiment"] == "negative").sum())
+    other = total - positive - negative
+    lines = [
+        f"Question: {question}",
+        f"Facts: {total} mentions — {positive} positive, {negative} negative, "
+        f"{other} neutral or mixed.",
+        "Items, most mentioned first:",
+    ]
+    for row in summarize_items(evidence).to_dict("records"):
+        lines.append(
+            f"- {row['item']} ({row['subject']}): {int(row['mentions'])} mentions, "
+            f"{int(row['positive'])} positive, {int(row['negative'])} negative, "
+            f"net {int(row['net']):+d}"
+        )
+    lines.append("Review sentences:")
+    for row in evidence.head(limit).to_dict("records"):
+        lines.append(
+            f"- ({row['location']}, {row['date']}, {row['item']}, "
+            f"{row['mention_sentiment']}) {row['sentence_text']}"
+        )
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": "\n".join(lines)},
+    ]
     pass
 
 

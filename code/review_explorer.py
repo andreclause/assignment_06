@@ -125,3 +125,79 @@ from reviews import (
 #
 # What the page does NOT do: call the API directly, group or pivot, or build the
 # prompt itself. That logic lives in the package; the page only assembles it.
+
+# 1. Which reviews
+reviews_file = os.environ.get("REVIEWS_FILE", REVIEWS_FILE)
+
+# 2. Heading
+st.title("Salt City Coffee — What Customers Are Saying")
+st.markdown(
+    "Every customer review, broken into the things people talk about. Filter by "
+    "location or subject, or ask a question at the bottom of the page."
+)
+
+# 3. The data
+mentions = analyze_reviews(reviews_file)
+
+# 4. Filters
+col_location, col_subject = st.columns(2)
+with col_location:
+    location = st.selectbox(
+        "Location", ["All"] + sorted(mentions["location"].unique()), key="location")
+with col_subject:
+    subject = st.selectbox(
+        "Subject", ["All"] + sorted(mentions["subject"].unique()), key="subject")
+
+selected = mentions
+if location != "All":
+    selected = selected[selected["location"] == location]
+if subject != "All":
+    selected = selected[selected["subject"] == subject]
+
+# 5. Metrics
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Reviews", int(selected["review_id"].nunique()))
+m2.metric("Mentions", len(selected))
+m3.metric("Positive", int((selected["mention_sentiment"] == "positive").sum()))
+m4.metric("Negative", int((selected["mention_sentiment"] == "negative").sum()))
+
+# 6. Tabs
+summary = summarize_items(selected)
+tab_praised, tab_complained, tab_said = st.tabs(
+    ["Most praised", "Most complained about", "What people said"])
+
+tab_praised.dataframe(
+    summary[summary["net"] > 0].sort_values("net", ascending=False).head(5),
+    hide_index=True)
+tab_complained.dataframe(
+    summary[summary["net"] < 0].sort_values("net", ascending=True).head(5),
+    hide_index=True)
+tab_said.dataframe(
+    selected[["date", "location", "item", "subject", "mention_sentiment",
+              "assessments", "sentence_text"]],
+    hide_index=True)
+
+# 7. Question box
+st.subheader("Ask the reviews")
+question = st.text_input("Your question", key="question",
+                         placeholder="What is the most popular product?")
+asked = st.button("Ask", key="ask")
+
+# 8. When Ask is clicked
+if asked and question.strip():
+    scope, evidence = answer_question(question, mentions, load_aliases())
+    if evidence.empty:
+        st.warning(
+            f"No reviews mention {describe_scope(scope)}. Try a menu item, "
+            "a staff member, or part of the shop."
+        )
+    else:
+        messages = build_messages(question, evidence)
+        with st.spinner("Asking the model..."):
+            answer = ask_llm(messages)
+        st.markdown(answer)
+        st.caption(f"Based on {len(evidence)} mentions — {describe_scope(scope)}:")
+        st.dataframe(
+            evidence[["date", "location", "item", "mention_sentiment",
+                      "sentence_text"]],
+            hide_index=True)
